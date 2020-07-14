@@ -1,0 +1,195 @@
+asc_template_version: 2016-05-19
+
+description: |
+    H2O Driverless AI
+
+parameter_groups:
+    - label: Conductor information
+      description: Parameters that define Conductor REST configuration
+      parameters:
+        - conductor_ssl_key_file
+        - conductor_ssl_enabled
+        - ascd_port
+    - label: Port information
+      description: Parameters that define external system login information
+      parameters:
+        - dai_port
+        - h2o_port
+        - procsy_port
+        - vis_server_port
+    - label: SSL information
+      description: Paramers for configuring SSL for Driverless AI
+      parameters:
+        - ssl_enabled
+        - ssl_key_file
+        - ssl_crt_file
+
+parameters:
+    conductor_ssl_key_file:
+        type: string
+        label: Location of Conductor SSL key file
+        description: Location of Conductor SSL key file
+        default: ${EGO_TOP}/wlp/usr/shared/resources/security/cacert.pem
+
+    conductor_ssl_enabled:
+        type: string
+        label: Conductor SSL enabled
+        description: Whether ssl for Conductor is enabled
+        default: true
+
+    ascd_port:
+        type: string
+        label: Port used by the ascd REST service
+        description: Port used by the ascd REST service
+        default: 8643
+
+    dai_port:
+        type: string
+        label: Port used by the Driverless AI process
+        description: Port used by the Driverless AI process
+        default: 12345
+
+    h2o_port:
+        type: string
+        label: Port used by the h2o process
+        description: Port used by the h2o process
+        default: 54321
+
+    procsy_port:
+        type: string
+        label: Port used by the procsy process
+        description: Port used by the procsy process
+        default: 12347
+
+    vis_server_port:
+        type: string
+        label: Port used by the vis server process
+        description: Port used by the vis server process
+        default: 12346
+
+    dai_installdir:
+        type: string
+        label: Install Directory
+        description: "Installation Directory for H2O Driverless AI, example: /var/dai/dai-1.3.1-linux-x86_64"
+
+    data_dir:
+        type: string
+        label: Data Directory
+        description: Directory that will store information regarding expermiments. Should be on a shared filesystem to support failover.
+
+    log_dir:
+        type: string
+        label: Log Directory
+        description: Directory that will store per-instance logs.
+
+    dai_rg:
+        type: string
+        label: Resource Group for Driverless AI
+        description: Resource Group for Driverless AI
+        constraints:
+            # this custom_constraint will tell the GUI to allow a selectable list of RG.
+            - custom_constraint: asc.getresourcegroup
+
+    dai_execuser:
+        type: string
+        label: Execution user
+        description: Execution user for H2O Driverless AI
+
+    ssl_enabled:
+        type: string
+        label: Enable SSL
+        description: Whether to enable ssl for Driverless AI
+        default: false
+
+    ssl_key_file:
+        type: string
+        label: Location of SSL key file
+        description: Location of SSL key file
+        default: /etc/dai/private_key.pem
+
+    ssl_crt_file:
+        type: string
+        label: Location of SSL crt file
+        description: Location of SSL crt file
+        default: /etc/dai/cert.pem
+
+    additional_config:
+        type: string
+        label: Additional Driverless AI Configuration
+        description: Specify additional Driverless AI Configuration options in the environment variable form. If specifying multiple semi colon separate them.
+        default: none
+
+resources:
+    serviceDAI_activity:
+        type: IBM::ASC::Activity
+        properties:
+            commands:
+                start: #required
+                    command: { list_join: [ "", [ { get_param: dai_installdir }, "/spectrum_conductor/start.sh" ] ] }
+                stop:
+                    command: { list_join: [ "", [ { get_param: dai_installdir }, "/kill-dai.sh" ] ] }
+                monitor:
+                    command: { list_join: [ "", [ { get_param: dai_installdir }, "/spectrum_conductor/jobMonitor.sh" ] ] }
+            workingdirectory: { list_join: [ "", [ { get_param: dai_installdir }, "/spectrum_conductor" ] ] }
+            log_path: { list_join: [ "", [ { get_param: log_dir }, "/*"] ] }
+            environmentvariables: #optional
+                INSTALL_DIR: { get_param: dai_installdir }
+                EXEC_USER: { get_param: dai_execuser }
+                DRIVERLESS_AI_DATA_DIRECTORY: { get_param: data_dir }
+                DRIVERLESS_AI_PORT: { get_param: dai_port }
+                DRIVERLESS_AI_H2O_PORT: { get_param: h2o_port }
+                DRIVERLESS_AI_PROCSY_PORT: { get_param: procsy_port }
+                DRIVERLESS_AI_VIS_SERVER_PORT: { get_param: vis_server_port }
+                DRIVERLESS_AI_ENABLE_HTTPS: { get_param: ssl_enabled }
+                DRIVERLESS_AI_SSL_KEY_FILE: { get_param: ssl_key_file }
+                DRIVERLESS_AI_SSL_CRT_FILE: { get_param: ssl_crt_file }
+                DRIVERLESS_AI_AUTHENTICATION_METHOD: "ibm_spectrum_conductor"
+                RUN_DAI_LOG_DIR: { get_param: log_dir }
+                ADDITIONAL_CONFIG: { get_param: additional_config }
+                APP_UUID: { get_attr: [ _appinstance_, uuid ] }
+                ASCD_HTTPS_ENABLED: { get_param: conductor_ssl_enabled }
+                ASCD_REST_CACERT_PATH: { get_param: conductor_ssl_key_file }
+                ASCD_REST_LOCATION: ${SERVICE_ascd_LOCATION}
+                ASCD_REST_PORT: { get_param: ascd_port }
+
+    serviceDAI: #AppName will be prepended for uniqueness
+        type: IBM::ASC::Service
+        properties:
+            description: DAI Service
+            numinstances:
+                min: 1 # required, can also be a %
+                max: 1  # required, can also be a %
+                instancetoslotratio: "1:3"
+            usegpu: true
+            exclusivegpu: false
+            resourcegroup:  { get_param: dai_rg } # required
+            resourcerequirement: select('LINUXPPC64'||'LINUXPPC64LE'||'LINUX86'||'X86_64'||'IA64'||'NTX86'||'NTX64'||'SOLX8664'||'SOL64') # optional
+            activity: # at least one must be specified. Specify more than one to support multiple OS types
+                - { get_resource: serviceDAI_activity }
+            consumer:
+                name: DAItest
+                executionuser: { get_param: dai_execuser }
+            controlpolicy: # starttype will be manual for all ASC services
+                maxrestarts: 10
+                hostfailoverinterval_sec: 1
+                blockedhostexitvalues: [-1, 1]
+            dependency:
+              - target: ascd
+                satisfy:
+                  - STARTED
+                keep:
+                  - DEFINED
+                  - INIT
+                  - ALLOCATING
+                  - STARTED
+                  - DEALLOCATING
+                  - ERROR
+                  - HANG
+                  - FROZEN
+                  - TENTATIVE
+                autostart: false
+
+outputs:
+    dai_url:
+        description: H2O Driverless AI URL from job Monitor
+        value: { get_attr: [serviceDAI, userinfo, 1] } # the last number is sequence number
